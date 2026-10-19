@@ -4,7 +4,7 @@
 'use strict';
 
 const STORE_KEY = 'kintore-log-v1';
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.0.1';
 const PARTS = ['胸', '背中', '肩', '腕', '脚', '腹筋', '有酸素', 'その他'];
 const PART_COLORS = ['--chart-1', '--chart-2', '--chart-3', '--chart-4', '--chart-5', '--chart-6', '--chart-7', '--chart-8'];
 
@@ -216,7 +216,19 @@ function renderRecord() {
     const prev = Object.keys(db.sessions).filter(d => d < state.date).sort().pop();
     if (prev) html += `<button class="btn ghost block" id="copy-prev" style="margin-top:8px">${labelDate(prev)} のメニューをコピー</button>`;
   }
+  // 記録が1件もないとき（初回）は、これまでのデータの取り込みを案内する
+  if (Object.keys(db.sessions).length === 0) {
+    html += `
+    <div class="card" style="margin-top:16px">
+      <h2>これまでの記録を取り込む</h2>
+      <div class="muted">筋トレMEMOから移した記録ファイル（kintore_initial.json または CSV）を選ぶと、過去の記録が表示されます。ファイルは先にAirDropなどで「ファイル」Appに保存しておいてください。</div>
+      <button class="btn primary block" id="first-import" style="margin-top:10px">ファイルを選んで取り込む</button>
+      <input type="file" id="first-file" accept=".json,.csv,application/json,text/csv" class="hidden">
+    </div>`;
+  }
   $('#view').innerHTML = html;
+  $('#first-import')?.addEventListener('click', () => $('#first-file').click());
+  $('#first-file')?.addEventListener('change', ev => { const f = ev.target.files[0]; if (f) importFile(f); });
 
   $('#d-prev').onclick = () => { state.date = addDays(state.date, -1); render(); };
   $('#d-next').onclick = () => { state.date = addDays(state.date, 1); render(); };
