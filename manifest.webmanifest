@@ -1,0 +1,16 @@
+{
+  "name": "筋トレログ",
+  "short_name": "筋トレログ",
+  "description": "筋トレの記録・分析・AI相談用のJSON出力ができる、オフライン対応のアプリ",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#d92b2b",
+  "theme_color": "#d92b2b",
+  "lang": "ja",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

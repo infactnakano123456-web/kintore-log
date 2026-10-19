@@ -1,0 +1,4 @@
+# 個人の記録データは公開しない
+private/
+.claude/
+.DS_Store
