@@ -299,3 +299,31 @@ pre.json {
   background: rgba(30,30,30,.92); color: #fff; padding: 9px 16px; border-radius: 999px;
   font-size: 14px; z-index: 30; max-width: 90vw;
 }
+
+/* ── バックアップのお知らせ・トレーニングプラン ───────── */
+.notice { display: flex; gap: 10px; align-items: center; background: #fff4d6; color: #5a4300; border: 1px solid #f0c64a; border-radius: 12px; padding: 10px 12px; margin: 10px 10px 0; font-size: 14px; }
+.notice small { font-size: 12px; }
+.notice .btn { flex: none; line-height: 1.2; }
+@media (prefers-color-scheme: dark) { .notice { background: #3a300f; color: #f5dc8f; border-color: #7a6214; } }
+.plan-panel { background: var(--card); border-radius: var(--radius); margin: 0 10px 12px; overflow: hidden; border: 1.5px solid var(--accent); }
+.pl-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; font-weight: 700; border-bottom: 1px solid var(--line); }
+.pl-head small { color: var(--sub); font-weight: 500; }
+.pl-head button { background: none; border: 0; color: var(--accent); font-size: 13px; padding: 2px 4px; }
+.pl-row { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: 0; background: none; padding: 10px; border-bottom: 1px solid var(--line); }
+.pl-row:last-child { border-bottom: 0; }
+.pl-row .ck { flex: none; width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--line); text-align: center; line-height: 20px; font-weight: 800; color: #fff; }
+.pl-row.done .ck { background: var(--fab); border-color: var(--fab); }
+.pl-row.done .nm { color: var(--sub); text-decoration: line-through; }
+.pl-row .nm { flex: 1; font-size: 15px; }
+.pl-row .nm small { display: block; font-size: 11px; color: var(--sub); text-decoration: none; margin-top: 2px; }
+.pl-row .go { color: var(--sub); font-size: 20px; }
+.day-empty.short { min-height: 18vh; }
+.day-empty.short .big-ico { font-size: 48px; }
+.next-ex { display: block; margin: 12px 10px 0; width: calc(100% - 92px); border: 1.5px solid var(--accent); background: var(--card); color: var(--accent); border-radius: 12px; padding: 12px; font-weight: 700; text-align: left; }
+.next-ex.all { color: var(--sub); border-color: var(--line); font-weight: 500; font-size: 13px; }
+.pe-list { background: var(--card); border-radius: 12px; padding: 0 10px; }
+.pe-row { display: flex; align-items: center; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.pe-row:last-child { border-bottom: 0; }
+.pe-row .no { width: 20px; color: var(--sub); }
+.pe-row .nm { flex: 1; }
+.pe-row button { width: 32px; height: 32px; border: 0; border-radius: 8px; background: var(--line); padding: 0; }

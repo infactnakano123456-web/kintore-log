@@ -5,7 +5,8 @@
 'use strict';
 
 const STORE_KEY = 'kintore-log-v1';
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
+const BACKUP_REMIND_DAYS = 7;
 const PARTS = ['腕', '胸', '背中', '肩', '脚', '腹筋', '有酸素', 'その他'];
 const PART_LABEL = { '有酸素': '有酸素運動' };
 const PART_COLORS = ['--chart-1', '--chart-2', '--chart-3', '--chart-4', '--chart-5', '--chart-6', '--chart-7', '--chart-8'];
@@ -29,6 +30,7 @@ const MASTER_VERSION = 1;
 
 /* ── データ ──────────────────────────────────────────────
  * db = {
+ *   plans: [ { id, name, exercises: [種目名...] } ]   トレーニングプラン（記録とは別に保存）
  *   sessions: { 'YYYY-MM-DD': { items: [ { exercise, kind: 'strength'|'cardio', sets: [...] } ] } },
  *   exercises: { 名前: { part, kind } },
  *   meta: { lastBackup, master }
@@ -38,7 +40,7 @@ const MASTER_VERSION = 1;
 let db = loadDb();
 
 function emptyDb() {
-  return { app: 'kintore-log', version: 1, sessions: {}, exercises: {}, meta: {} };
+  return { app: 'kintore-log', version: 1, sessions: {}, exercises: {}, plans: [], meta: {} };
 }
 function loadDb() {
   let d = emptyDb();
@@ -52,6 +54,7 @@ function normalizeDb(d) {
   const out = emptyDb();
   out.sessions = d.sessions || {};
   out.exercises = d.exercises || {};
+  out.plans = Array.isArray(d.plans) ? d.plans : [];
   out.meta = d.meta || {};
   return out;
 }
@@ -82,6 +85,32 @@ function saveDb(now = true) {
   };
   if (now) write(); else saveTimer = setTimeout(write, 300);
 }
+/* ── バックアップ ────────────────────────────────
+ * データは端末内にしかないため、記録が変わってから一定日数バックアップしていなければホームで知らせる。
+ * 「変わったか」は、最後にバックアップしたときの記録の指紋（ハッシュ）と比べて判定する。
+ */
+function dataSignature() {
+  const str = JSON.stringify([db.sessions, db.plans]);
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(36) + ':' + str.length;
+}
+function backupStatus() {
+  const has = Object.keys(db.sessions).length > 0;
+  const last = db.meta.lastBackup ? new Date(db.meta.lastBackup) : null;
+  const days = last ? Math.floor((Date.now() - last.getTime()) / 86400000) : null;
+  const changed = !last || db.meta.backupSig !== dataSignature();
+  return { last, days, changed, due: has && changed && (days == null || days >= BACKUP_REMIND_DAYS) };
+}
+async function runBackup() {
+  const ok = await shareText(JSON.stringify(db), `kintore-backup-${todayIso()}.json`);
+  if (!ok) return;
+  db.meta.lastBackup = new Date().toISOString();
+  db.meta.backupSig = dataSignature();
+  saveDb(); render();
+  toast('バックアップを保存しました');
+}
+
 // 入力途中の空のセット・空の種目・空の日を取り除く
 function cleanupDay(date) {
   const s = db.sessions[date];
@@ -242,13 +271,17 @@ const state = {
   pickerOpen: {},
 };
 
-function leaveView() {
+// 画面を離れるときに、その日の入力途中の空データを片付ける。
+// ただし同じ日の種目画面へ進むとき（追加したばかりの空の種目がある）は片付けない
+function leaveView(next = null) {
   stopTimer();
   const v = state.view;
-  if (v.date && (v.name === 'exercise' || v.name === 'day')) cleanupDay(v.date);
+  if (!v.date || !(v.name === 'exercise' || v.name === 'day')) return;
+  if (next && next.name === 'exercise' && next.date === v.date) return;
+  cleanupDay(v.date);
 }
 function go(view, replace = false) {
-  leaveView();
+  leaveView(view);
   if (!replace) state.stack.push(state.view);
   state.view = view;
   render();
@@ -364,6 +397,16 @@ function renderHome() {
       <div class="range-result" id="h-result"></div>
     </div>
     ${totalDays === 0 ? importCardHtml() : ''}`;
+  const bs = backupStatus();
+  if (bs.due) {
+    $('#view').insertAdjacentHTML('afterbegin', `
+      <div class="notice">
+        <div><b>バックアップしてください</b><br><small>${bs.last ? `最後のバックアップから${bs.days}日たっています。` : 'まだ一度もバックアップしていません。'}記録はこのiPhoneの中にしかありません。</small>
+        <br><small>共有メニューで「"ファイル"に保存」→ iCloud Drive の「筋トレログ」を選んでください。</small></div>
+        <button class="btn primary small" id="h-backup">今すぐ<br>バックアップ</button>
+      </div>`);
+    $('#h-backup').onclick = runBackup;
+  }
 
   $('#view').querySelectorAll('[data-day]').forEach(b => b.onclick = () => go({ name: 'day', date: b.dataset.day }));
   const shift = n => { const d = new Date(y, m - 1 + n, 1); state.homeMonth = isoDate(d).slice(0, 7); render(); };
@@ -449,8 +492,11 @@ function renderDay() {
       <div><span>合計レップ数</span><b>${fmt(sm.reps, 0)}</b></div>
       <div><span>合計負荷量</span><b>${fmt(sm.volume, 0)}</b></div>
     </div>`;
+  const plan = activePlan(date);
+  if (plan) html += planPanelHtml(date, plan);
   if (!session || !session.items.length) {
-    html += `<button class="day-empty" id="d-empty"><span class="big-ico">💪</span>タップしてトレーニング記録を追加</button>`;
+    html += `<button class="day-empty ${plan ? 'short' : ''}" id="d-empty"><span class="big-ico">💪</span>タップしてトレーニング記録を追加</button>`;
+    if (!plan) html += `<button class="btn outline block" id="d-plan">📋 トレーニングプランから始める</button>`;
     const prev = Object.keys(db.sessions).filter(d => d < date).sort().pop();
     if (prev) html += `<button class="btn ghost block" id="d-copy">${labelDate(prev)} のメニューをコピー</button>`;
   } else {
@@ -463,6 +509,10 @@ function renderDay() {
   $('#d-next').onclick = () => go({ name: 'day', date: addDays(date, 1) }, true);
   $('#d-add').onclick = () => go({ name: 'picker', date });
   $('#d-empty')?.addEventListener('click', () => go({ name: 'picker', date }));
+  $('#d-plan')?.addEventListener('click', () => openPlanPicker(date));
+  $('#pl-change')?.addEventListener('click', () => openPlanPicker(date));
+  $('#pl-off')?.addEventListener('click', () => { delete db.meta.dayPlans[date]; saveDb(); render(); });
+  $('#view').querySelectorAll('[data-plan-ex]').forEach(el => el.onclick = () => startExercise(date, el.dataset.planEx, false));
   $('#d-copy')?.addEventListener('click', () => copyMenu(Object.keys(db.sessions).filter(d => d < date).sort().pop(), date));
   $('#view').querySelectorAll('[data-open]').forEach(el => el.onclick = () => go({ name: 'exercise', date, idx: Number(el.dataset.open) }));
   $('#view').querySelectorAll('[data-move]').forEach(el => el.onclick = ev => {
@@ -523,6 +573,8 @@ function openDayMenu(date) {
     <h3>${slashDate(date)}</h3>
     <div class="pick-list">
       ${!isToday && db.sessions[date] ? '<button data-m="copy-today">本日にコピーする</button>' : ''}
+      <button data-m="plan">トレーニングプランを選ぶ</button>
+      ${db.sessions[date] ? '<button data-m="save-plan">この日のメニューをプランとして保存</button>' : ''}
       <button data-m="ai">この日をAI出力（JSON）</button>
       ${db.sessions[date] ? '<button data-m="del" style="color:var(--accent)">この日の記録をすべて削除</button>' : ''}
     </div>
@@ -534,8 +586,123 @@ function openDayMenu(date) {
       closeSheet();
       if (m === 'copy-today') { copyMenu(date, todayIso()); go({ name: 'day', date: todayIso() }, true); }
       if (m === 'ai') { state.ex.scope = 'day'; state.ex.date = date; setTab('export'); }
+      if (m === 'plan') openPlanPicker(date);
+      if (m === 'save-plan') openPlanEditor(null, db.sessions[date].items.map(i => i.exercise));
       if (m === 'del' && confirm(`${slashDate(date)} の記録をすべて削除しますか？`)) { delete db.sessions[date]; saveDb(); render(); }
     });
+  });
+}
+
+/* ── トレーニングプラン ────────────────────────────
+ * 種目の並びだけを保存し、日ごとに「どのプランで行うか」を meta.dayPlans に覚える。
+ * 記録（sessions）には入れないので、合計やトレーニング日数には影響しない。
+ */
+function activePlan(date) {
+  const id = db.meta.dayPlans?.[date];
+  return id ? db.plans.find(p => p.id === id) || null : null;
+}
+const doneOn = (date, name) => !!db.sessions[date]?.items.some(i => i.exercise === name && i.sets.some(s => !isEmptySet(s, i.kind)));
+
+function planPanelHtml(date, plan) {
+  const done = plan.exercises.filter(n => doneOn(date, n)).length;
+  return `
+    <div class="plan-panel">
+      <div class="pl-head"><span>📋 ${esc(plan.name)}</span><small>${done} / ${plan.exercises.length} 種目</small>
+        <span class="spacer"></span><button id="pl-change">変更</button><button id="pl-off">外す</button></div>
+      ${plan.exercises.map(n => {
+        const ok = doneOn(date, n);
+        const prev = previousRecord(n, date);
+        const hint = prev && prev.kind !== 'cardio' ? prev.sets.slice(0, 4).map(s => `${s.w != null ? fmtFixed(s.w, 1) : '-'}×${s.r ?? '-'}`).join(' / ') : '';
+        return `<button class="pl-row ${ok ? 'done' : ''}" data-plan-ex="${esc(n)}"><span class="ck">${ok ? '✓' : ''}</span>
+          <span class="nm">${esc(n)}${hint ? `<small>前回 ${hint}</small>` : ''}</span><span class="go">›</span></button>`;
+      }).join('')}
+    </div>`;
+}
+
+function nextPlanExerciseHtml(date, current) {
+  const plan = activePlan(date);
+  if (!plan) return '';
+  const i = plan.exercises.indexOf(current);
+  const rest = [...plan.exercises.slice(i + 1), ...plan.exercises.slice(0, Math.max(0, i))].filter(n => n !== current && !doneOn(date, n));
+  if (!rest.length) return `<div class="next-ex all">📋 ${esc(plan.name)} はこれで最後の種目です</div>`;
+  return `<button class="next-ex" id="ex-next" data-next="${esc(rest[0])}">次の種目：${esc(rest[0])} ›</button>`;
+}
+
+function openPlanPicker(date) {
+  const items = db.sessions[date]?.items || [];
+  openSheet(`
+    <h3>トレーニングプランを選ぶ</h3>
+    ${db.plans.length ? `<div class="pick-list">${db.plans.map(pl =>
+      `<button data-pick="${pl.id}"><span><b>${esc(pl.name)}</b><br><small class="muted">${pl.exercises.map(esc).join('・')}</small></span></button>`).join('')}</div>`
+      : '<div class="muted">まだプランがありません。よく行うメニューを作っておくと、ここから呼び出せます。</div>'}
+    <button class="btn outline block" id="pp-new" style="margin-top:10px">＋ 新しいプランを作る</button>
+    ${items.length ? '<button class="btn ghost block" id="pp-save">この日のメニューをプランとして保存</button>' : ''}
+    <button class="btn block" id="pp-close" style="margin-top:6px">閉じる</button>
+  `, sh => {
+    sh.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => {
+      (db.meta.dayPlans ||= {})[date] = b.dataset.pick;
+      saveDb(); closeSheet(); render();
+    });
+    sh.querySelector('#pp-new').onclick = () => openPlanEditor(null, [], date);
+    sh.querySelector('#pp-save')?.addEventListener('click', () => openPlanEditor(null, items.map(i => i.exercise), date));
+    sh.querySelector('#pp-close').onclick = closeSheet;
+  });
+}
+
+// プランの作成・編集。useOn を渡すと、保存後にその日のプランとして選ぶ
+function openPlanEditor(plan, initial = [], useOn = null) {
+  const draft = { name: plan?.name || '', exercises: [...(plan?.exercises || initial)] };
+  const options = PARTS.map(p => {
+    const names = exercisesOfPart(p);
+    return names.length ? `<optgroup label="${partLabel(p)}">${names.map(n => `<option>${esc(n)}</option>`).join('')}</optgroup>` : '';
+  }).join('');
+  const draw = sh => {
+    sh.querySelector('#pe-list').innerHTML = draft.exercises.length ? draft.exercises.map((n, i) => `
+      <div class="pe-row"><span class="no">${i + 1}</span><span class="nm">${esc(n)}</span>
+        <button data-up="${i}" ${i === 0 ? 'disabled' : ''} aria-label="上へ">↑</button>
+        <button data-dn="${i}" ${i === draft.exercises.length - 1 ? 'disabled' : ''} aria-label="下へ">↓</button>
+        <button data-rm="${i}" aria-label="外す">✕</button></div>`).join('') : '<div class="muted" style="padding:8px 0">種目を追加してください</div>';
+    sh.querySelectorAll('[data-up]').forEach(b => b.onclick = () => { const i = +b.dataset.up; [draft.exercises[i - 1], draft.exercises[i]] = [draft.exercises[i], draft.exercises[i - 1]]; draw(sh); });
+    sh.querySelectorAll('[data-dn]').forEach(b => b.onclick = () => { const i = +b.dataset.dn; [draft.exercises[i + 1], draft.exercises[i]] = [draft.exercises[i], draft.exercises[i + 1]]; draw(sh); });
+    sh.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { draft.exercises.splice(+b.dataset.rm, 1); draw(sh); });
+  };
+  openSheet(`
+    <h3>${plan ? 'プランを編集' : '新しいプラン'}</h3>
+    <label class="field"><span>プラン名</span><input type="text" id="pe-name" value="${esc(draft.name)}" placeholder="例: 胸の日、腕の日"></label>
+    <div class="pe-list" id="pe-list"></div>
+    <div class="row" style="margin:8px 0 14px">
+      <select id="pe-add"><option value="">＋ 種目を追加…</option>${options}</select>
+    </div>
+    <div class="row">
+      ${plan ? '<button class="btn danger" id="pe-del">削除</button>' : ''}
+      <span class="spacer"></span>
+      <button class="btn" id="pe-cancel">キャンセル</button>
+      <button class="btn primary" id="pe-ok">保存</button>
+    </div>
+  `, sh => {
+    draw(sh);
+    sh.querySelector('#pe-name').oninput = e => { draft.name = e.target.value; };
+    sh.querySelector('#pe-add').onchange = e => {
+      const n = e.target.value; e.target.value = '';
+      if (n && !draft.exercises.includes(n)) { draft.exercises.push(n); draw(sh); }
+    };
+    sh.querySelector('#pe-cancel').onclick = closeSheet;
+    sh.querySelector('#pe-del')?.addEventListener('click', () => {
+      if (!confirm(`プラン「${plan.name}」を削除しますか？（記録は消えません）`)) return;
+      db.plans = db.plans.filter(p => p.id !== plan.id);
+      for (const [d, id] of Object.entries(db.meta.dayPlans || {})) if (id === plan.id) delete db.meta.dayPlans[d];
+      saveDb(); closeSheet(); render(); toast('プランを削除しました');
+    });
+    sh.querySelector('#pe-ok').onclick = () => {
+      const name = draft.name.trim();
+      if (!name) { toast('プラン名を入れてください'); return; }
+      if (!draft.exercises.length) { toast('種目を1つ以上追加してください'); return; }
+      let target = plan;
+      if (target) Object.assign(target, { name, exercises: draft.exercises });
+      else { target = { id: 'p' + Date.now().toString(36), name, exercises: draft.exercises }; db.plans.push(target); }
+      if (useOn) (db.meta.dayPlans ||= {})[useOn] = target.id;
+      saveDb(); closeSheet(); render(); toast(`プラン「${name}」を保存しました`);
+    };
   });
 }
 
@@ -576,7 +743,7 @@ function renderPicker() {
 }
 
 // 種目を選んだら、その日に追加してセット入力画面へ（種目選択画面は履歴に残さない）
-function startExercise(date, name) {
+function startExercise(date, name, replace = true) {
   const session = db.sessions[date] || (db.sessions[date] = { items: [] });
   let idx = session.items.findIndex(i => i.exercise === name);
   if (idx < 0) {
@@ -585,7 +752,7 @@ function startExercise(date, name) {
     idx = session.items.length - 1;
     saveDb();
   }
-  go({ name: 'exercise', date, idx }, true);
+  go({ name: 'exercise', date, idx }, replace);
 }
 
 function openNewExercise(name, part, date) {
@@ -649,7 +816,9 @@ function renderExercise() {
       <div class="set-head">${cardio ? '<span>セット</span><span>距離</span><span>時間</span><span>kcal</span>' : '<span>セット</span><span>重さ</span><span>回数</span><span>RM</span><span>補助</span>'}</div>
       ${rows}
     </div>
+    ${nextPlanExerciseHtml(date, it.exercise)}
     <button class="fab" id="ex-add" aria-label="セットを追加">＋</button>`;
+  $('#ex-next')?.addEventListener('click', () => startExercise(date, $('#ex-next').dataset.next, true));
 
   const list = $('#view').querySelector('.set-list');
   list.addEventListener('input', ev => onSetInput(ev, it, cardio));
@@ -1205,14 +1374,17 @@ function fallbackCopy(text) {
   try { document.execCommand('copy'); toast('コピーしました'); } catch { toast('コピーできませんでした'); }
   ta.remove();
 }
+// 共有シート（「"ファイル"に保存」でiCloud Driveなどに保存できる）。保存できたら true を返す
 async function shareText(text, filename) {
   const file = new File([text], filename, { type: 'application/json' });
   if (navigator.canShare?.({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: filename }); return; } catch (err) { if (err.name === 'AbortError') return; }
+    try { await navigator.share({ files: [file], title: filename }); return true; }
+    catch (err) { if (err.name === 'AbortError') return false; }
   }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(file); a.download = filename; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  return true;
 }
 
 /* ── 設定 ────────────────────────────────────────── */
@@ -1232,7 +1404,13 @@ function renderSettings() {
         <button class="btn" id="s-import" style="flex:1">取り込み</button>
       </div>
       <input type="file" id="s-file" accept=".json,.csv,application/json,text/csv" class="hidden">
-      <p class="muted" style="margin:10px 0 0">データはこのiPhoneの中にだけ保存されます。機種変更やSafariのデータ削除に備えて、ときどき「バックアップ」でファイルに書き出してください（ファイルAppやiCloud Driveに保存できます）。</p>
+      <p class="muted" style="margin:10px 0 0">データはこのiPhoneの中にだけ保存されます。機種変更やSafariのデータ削除に備えて、ときどき「バックアップ」でファイルに書き出してください。共有メニューの「"ファイル"に保存」で iCloud Drive の「筋トレログ」に保存できます。記録が変わってから${BACKUP_REMIND_DAYS}日バックアップしていないと、ホームでお知らせします。</p>
+    </div>
+    <div class="card">
+      <h2>トレーニングプラン</h2>
+      <div class="muted" style="margin-bottom:8px">よく行うメニューを保存しておくと、日の画面から呼び出せます。</div>
+      <div id="s-plans"></div>
+      <button class="btn outline block" id="s-plan-new" style="margin-top:8px">＋ 新しいプランを作る</button>
     </div>
     <div class="card">
       <h2>種目の管理</h2>
@@ -1252,11 +1430,12 @@ function renderSettings() {
       `<button class="pk-item" data-ex="${esc(n)}"><span>${esc(n)}${db.exercises[n].hidden ? '（非表示）' : ''}</span><small>${count[n] || 0}セット</small></button>`).join('')}</div>`;
   }).join('');
   $('#s-ex').querySelectorAll('[data-ex]').forEach(b => b.onclick = () => openExerciseEditor(b.dataset.ex));
-  $('#s-backup').onclick = () => {
-    db.meta.lastBackup = new Date().toISOString(); saveDb();
-    shareText(JSON.stringify(db), `kintore-backup-${todayIso()}.json`);
-    setTimeout(render, 500);
-  };
+  $('#s-backup').onclick = runBackup;
+  $('#s-plans').innerHTML = db.plans.length ? `<div class="pick-list">${db.plans.map(pl =>
+    `<button data-plan="${pl.id}"><span><b>${esc(pl.name)}</b><br><small class="muted">${pl.exercises.map(esc).join('・')}</small></span></button>`).join('')}</div>`
+    : '<div class="muted">まだプランはありません</div>';
+  $('#s-plans').querySelectorAll('[data-plan]').forEach(b => b.onclick = () => openPlanEditor(db.plans.find(p => p.id === b.dataset.plan)));
+  $('#s-plan-new').onclick = () => openPlanEditor(null, []);
   $('#s-import').onclick = () => $('#s-file').click();
   $('#s-file').onchange = ev => { const f = ev.target.files[0]; if (f) importFile(f); ev.target.value = ''; };
   $('#s-wipe').onclick = () => {
@@ -1306,6 +1485,7 @@ function renameExercise(from, to) {
   }
   if (!db.exercises[to]) db.exercises[to] = db.exercises[from];
   delete db.exercises[from];
+  for (const pl of db.plans) pl.exercises = [...new Set(pl.exercises.map(n => n === from ? to : n))];
 }
 
 async function importFile(file) {
@@ -1325,6 +1505,7 @@ async function importFile(file) {
     if (replaceAll) db = emptyDb();
   }
   Object.assign(db.sessions, incoming.sessions);
+  for (const pl of incoming.plans || []) if (!db.plans.some(x => x.id === pl.id)) db.plans.push(pl);
   for (const [n, v] of Object.entries(incoming.exercises)) db.exercises[n] = db.exercises[n] || v;
   db.meta.master = 0;  // 取り込んだ種目の部位も筋トレMEMOに合わせ直す
   db = applyMaster(db);
