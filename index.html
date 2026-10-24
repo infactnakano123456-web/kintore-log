@@ -16,14 +16,15 @@
 </head>
 <body>
 <header class="topbar">
-  <h1 id="title">記録</h1>
-  <div id="topbar-actions"></div>
+  <div class="tb-left"><button id="tb-back" class="hidden" aria-label="戻る">‹ <span id="tb-back-label">戻る</span></button></div>
+  <h1 id="title">筋トレログ</h1>
+  <div class="tb-right" id="topbar-actions"></div>
 </header>
 
 <main id="view"></main>
 
 <nav class="tabbar" id="tabbar">
-  <button data-tab="record" class="active"><span class="ico">＋</span><span>記録</span></button>
+  <button data-tab="home" class="active"><span class="ico">⌂</span><span>ホーム</span></button>
   <button data-tab="history"><span class="ico">▦</span><span>履歴</span></button>
   <button data-tab="analysis"><span class="ico">↗</span><span>分析</span></button>
   <button data-tab="export"><span class="ico">{ }</span><span>AI出力</span></button>
