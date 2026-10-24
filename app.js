@@ -5,7 +5,7 @@
 'use strict';
 
 const STORE_KEY = 'kintore-log-v1';
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.2.1';
 const BACKUP_REMIND_DAYS = 7;
 const PARTS = ['腕', '胸', '背中', '肩', '脚', '腹筋', '有酸素', 'その他'];
 const PART_LABEL = { '有酸素': '有酸素運動' };
@@ -1561,6 +1561,30 @@ function csvToDb(text) {
 saveDb();
 render();
 navigator.storage?.persist?.();
+// 新しい版を公開したら、アプリを開いたときに自動で切り替える。
+// ホーム画面のアプリはメモリに残り続けるので、画面に戻ってきたときにも更新を確認する。
+// セット入力の途中では切り替えず、その画面を離れたときに再読み込みする。
+let updateReady = false;
+function applyUpdateIfIdle() {
+  if (updateReady && state.view.name !== 'exercise' && $('#sheet').classList.contains('hidden')) {
+    sessionStorage.setItem('kintore-updated', '1');
+    location.reload();
+  }
+}
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW登録失敗', e));
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+  }).catch(e => console.warn('SW登録失敗', e));
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) return;  // 初回インストール時は再読み込みしない
+    updateReady = true;
+    applyUpdateIfIdle();
+  });
+  const origRender = render;
+  render = function () { origRender(); applyUpdateIfIdle(); };
+}
+if (sessionStorage.getItem('kintore-updated')) {
+  sessionStorage.removeItem('kintore-updated');
+  toast(`新しい版（v${APP_VERSION}）に更新しました`);
 }
